@@ -26,8 +26,16 @@ import math
 from config import Config
 from database import db
 
+# =====================================================================================
+# --- BOT CLIENT AUR CACHE SETUP ---
+# =====================================================================================
+
 bot = Client("SimpleStreamBot", api_id=Config.API_ID, api_hash=Config.API_HASH, bot_token=Config.BOT_TOKEN, in_memory=True)
 multi_clients = {}; work_loads = {}; class_cache = {}
+
+# =====================================================================================
+# --- PYROGRAM BOT HANDLERS ---
+# =====================================================================================
 
 @bot.on_message(filters.command("start") & filters.private)
 async def start_command(client: Client, message: Message):
@@ -81,11 +89,45 @@ async def handle_file_upload(message: Message, user_id: int):
         
         await message.reply_text("__✅ File Uploaded!__", reply_markup=button, quote=True)
     except Exception as e:
-        print(f"!!! ERROR: {traceback.format_exc()}"); await message.reply_text("Sorry, something went wrong.")
+        print(f"!!! ERROR: {traceback.format_exc()}")
+        await message.reply_text("Sorry, something went wrong.")
 
 @bot.on_message(filters.private & (filters.document | filters.video | filters.audio))
 async def file_handler(_, message: Message):
     await handle_file_upload(message, message.from_user.id)
+
+@bot.on_chat_member_updated(filters.chat(Config.STORAGE_CHANNEL))
+async def simple_gatekeeper(c: Client, m_update: ChatMemberUpdated):
+    try:
+        if m_update.new_chat_member and m_update.new_chat_member.status == enums.ChatMemberStatus.MEMBER:
+            u = m_update.new_chat_member.user
+            if u.id == int(Config.OWNER_ID) or u.is_self:
+                return
+            print(f"Gatekeeper: Kicking {u.id}")
+            await c.ban_chat_member(Config.STORAGE_CHANNEL, u.id)
+            await c.unban_chat_member(Config.STORAGE_CHANNEL, u.id)
+    except Exception as e:
+        print(f"Gatekeeper Error: {e}")
+
+async def cleanup_channel(c: Client):
+    print("Gatekeeper: Running cleanup...")
+    allowed = {int(Config.OWNER_ID), c.me.id}
+    try:
+        async for m in c.get_chat_members(Config.STORAGE_CHANNEL):
+            if m.user.id in allowed:
+                continue
+            if m.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+                continue
+            try:
+                print(f"Cleanup: Kicking {m.user.id}")
+                await c.ban_chat_member(Config.STORAGE_CHANNEL, m.user.id)
+                await asyncio.sleep(1)
+            except FloodWait as e:
+                await asyncio.sleep(e.value)
+            except Exception as e:
+                print(f"Cleanup Error: {e}")
+    except Exception as e:
+        print(f"Cleanup Error: {e}")
 
 # =====================================================================================
 # --- SETUP: BOT, WEB SERVER, AUR LOGGING ---
@@ -93,9 +135,6 @@ async def file_handler(_, message: Message):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Yeh function bot ko web server ke saath start aur stop karta hai.
-    """
     print("--- Lifespan: Server chalu ho raha hai... ---")
     
     await db.connect()
@@ -152,23 +191,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- LOG FILTER: YEH SIRF /dl/ WALE LOGS KO CHUPAYEGA ---
 class HideDLFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        # Agar log message mein "GET /dl/" hai, toh usse mat dikhao
         return "GET /dl/" not in record.getMessage()
 
-# Uvicorn ke 'access' logger par filter lagao
 logging.getLogger("uvicorn.access").addFilter(HideDLFilter())
-# --- FIX KHATAM ---
-
 
 # =====================================================================================
 # --- MULTI-CLIENT LOGIC ---
 # =====================================================================================
 
 class TokenParser:
-    """ Environment variables se MULTI_TOKENs ko parse karta hai. """
     @staticmethod
     def parse_from_env():
         return {
@@ -179,7 +212,6 @@ class TokenParser:
         }
 
 async def start_client(client_id, bot_token):
-    """ Ek naye client bot ko start karta hai. """
     try:
         print(f"Attempting to start Client: {client_id}")
         client = await Client(
@@ -197,7 +229,6 @@ async def start_client(client_id, bot_token):
         print(f"!!! CRITICAL ERROR: Failed to start Client {client_id} - Error: {e}")
 
 async def initialize_clients():
-    """ Saare additional clients ko initialize karta hai. """
     all_tokens = TokenParser.parse_from_env()
     if not all_tokens:
         print("No additional clients found. Using default bot only.")
@@ -244,39 +275,11 @@ def mask_filename(name: str):
     return f"{masked_title} {metadata_part}{ext}".strip()
 
 # =====================================================================================
-# --- PYROGRAM BOT HANDLERS ---
-# =====================================================================================
-
-
-@bot.on_chat_member_updated(filters.chat(Config.STORAGE_CHANNEL))
-async def simple_gatekeeper(c: Client, m_update: ChatMemberUpdated):
-    try:
-        if(m_update.new_chat_member and m_update.new_chat_member.status==enums.ChatMemberStatus.MEMBER):
-            u=m_update.new_chat_member.user
-            if u.id==Config.OWNER_ID or u.is_self: return
-            print(f"Gatekeeper: Kicking {u.id}"); await c.ban_chat_member(Config.STORAGE_CHANNEL,u.id); await c.unban_chat_member(Config.STORAGE_CHANNEL,u.id)
-    except Exception as e: print(f"Gatekeeper Error: {e}")
-
-async def cleanup_channel(c: Client):
-    print("Gatekeeper: Running cleanup..."); allowed={Config.OWNER_ID,c.me.id}
-    try:
-        async for m in c.get_chat_members(Config.STORAGE_CHANNEL):
-            if m.user.id in allowed: continue
-            if m.status in [enums.ChatMemberStatus.ADMINISTRATOR,enums.ChatMemberStatus.OWNER]: continue
-            try: print(f"Cleanup: Kicking {m.user.id}"); await c.ban_chat_member(Config.STORAGE_CHANNEL,m.user.id); await asyncio.sleep(1)
-            except FloodWait as e: await asyncio.sleep(e.value)
-            except Exception as e: print(f"Cleanup Error: {e}")
-    except Exception as e: print(f"Cleanup Error: {e}")
-
-# =====================================================================================
-# --- FASTAPI WEB SERVER ---
+# --- FASTAPI WEB SERVER ROUTES ---
 # =====================================================================================
  
 @app.get("/")
 async def health_check():
-    """
-    This route provides a 200 OK response for uptime monitors.
-    """
     return {"status": "ok", "message": "Server is healthy and running!"}
 
 @app.get("/show/{unique_id}", response_class=HTMLResponse)
@@ -315,54 +318,105 @@ async def get_file_details_api(request: Request, unique_id: str):
     return response_data
 
 class ByteStreamer:
-    def __init__(self,c:Client):self.client=c
+    def __init__(self, c: Client):
+        self.client = c
+
     @staticmethod
-    async def get_location(f:FileId): return raw.types.InputDocumentFileLocation(id=f.media_id,access_hash=f.access_hash,file_reference=f.file_reference,thumb_size=f.thumbnail_size)
-    async def yield_file(self,f:FileId,i:int,o:int,fc:int,lc:int,pc:int,cs:int):
-        c=self.client;work_loads[i]+=1;ms=c.media_sessions.get(f.dc_id)
+    async def get_location(f: FileId):
+        return raw.types.InputDocumentFileLocation(
+            id=f.media_id,
+            access_hash=f.access_hash,
+            file_reference=f.file_reference,
+            thumb_size=f.thumbnail_size
+        )
+
+    async def yield_file(self, f: FileId, i: int, o: int, fc: int, lc: int, pc: int, cs: int):
+        c = self.client
+        work_loads[i] += 1
+        ms = c.media_sessions.get(f.dc_id)
         if ms is None:
-            if f.dc_id!=await c.storage.dc_id():
-                ak=await Auth(c,f.dc_id,await c.storage.test_mode()).create();ms=Session(c,f.dc_id,ak,await c.storage.test_mode(),is_media=True);await ms.start();ea=await c.invoke(raw.functions.auth.ExportAuthorization(dc_id=f.dc_id));await ms.invoke(raw.functions.auth.ImportAuthorization(id=ea.id,bytes=ea.bytes))
-            else:ms=c.session
-            c.media_sessions[f.dc_id]=ms
-        loc=await self.get_location(f);cp=1
+            if f.dc_id != await c.storage.dc_id():
+                ak = await Auth(c, f.dc_id, await c.storage.test_mode()).create()
+                ms = Session(c, f.dc_id, ak, await c.storage.test_mode(), is_media=True)
+                await ms.start()
+                ea = await c.invoke(raw.functions.auth.ExportAuthorization(dc_id=f.dc_id))
+                await ms.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
+            else:
+                ms = c.session
+            c.media_sessions[f.dc_id] = ms
+        loc = await self.get_location(f)
+        cp = 1
         try:
-            while cp<=pc:
-                r=await ms.invoke(raw.functions.upload.GetFile(location=loc,offset=o,limit=cs),retries=0)
-                if isinstance(r,raw.types.upload.File):
-                    chk=r.bytes
-                    if not chk:break
-                    if pc==1:yield chk[fc:lc]
-                    elif cp==1:yield chk[fc:]
-                    elif cp==pc:yield chk[:lc]
-                    else:yield chk
-                    cp+=1;o+=cs
-                else:break
-        finally:work_loads[i]-=1
+            while cp <= pc:
+                r = await ms.invoke(raw.functions.upload.GetFile(location=loc, offset=o, limit=cs), retries=0)
+                if isinstance(r, raw.types.upload.File):
+                    chk = r.bytes
+                    if not chk:
+                        break
+                    if pc == 1:
+                        yield chk[fc:lc]
+                    elif cp == 1:
+                        yield chk[fc:]
+                    elif cp == pc:
+                        yield chk[:lc]
+                    else:
+                        yield chk
+                    cp += 1
+                    o += cs
+                else:
+                    break
+        finally:
+            work_loads[i] -= 1
 
 @app.get("/dl/{mid}/{fname}")
-async def stream_media(r:Request,mid:int,fname:str):
-    if not work_loads: raise HTTPException(503)
+async def stream_media(r: Request, mid: int, fname: str):
+    if not work_loads:
+        raise HTTPException(503)
     client_id = min(work_loads, key=work_loads.get)
     c = multi_clients.get(client_id)
-    if not c: raise HTTPException(503)
+    if not c:
+        raise HTTPException(503)
     
-    tc=class_cache.get(c) or ByteStreamer(c);class_cache[c]=tc
+    tc = class_cache.get(c) or ByteStreamer(c)
+    class_cache[c] = tc
     try:
-        msg=await c.get_messages(Config.STORAGE_CHANNEL,mid);m=msg.document or msg.video or msg.audio
-        if not m or msg.empty:raise FileNotFoundError
-        fid=FileId.decode(m.file_id);fsize=m.file_size;rh=r.headers.get("Range","");fb,ub=0,fsize-1
+        msg = await c.get_messages(Config.STORAGE_CHANNEL, mid)
+        m = msg.document or msg.video or msg.audio
+        if not m or msg.empty:
+            raise FileNotFoundError
+        fid = FileId.decode(m.file_id)
+        fsize = m.file_size
+        rh = r.headers.get("Range", "")
+        fb, ub = 0, fsize - 1
         if rh:
-            rps=rh.replace("bytes=","").split("-");fb=int(rps[0])
-            if len(rps)>1 and rps[1]:ub=int(rps[1])
-        if(ub>=fsize)or(fb<0):raise HTTPException(416)
-        rl=ub-fb+1;cs=1024*1024;off=(fb//cs)*cs;fc=fb-off;lc=(ub%cs)+1;pc=math.ceil(rl/cs)
-        body=tc.yield_file(fid,client_id,off,fc,lc,pc,cs);sc=206 if rh else 200
-        hdrs={"Content-Type":m.mime_type or "application/octet-stream","Accept-Ranges":"bytes","Content-Disposition":f'inline; filename="{m.file_name}"',"Content-Length":str(rl)}
-        if rh:hdrs["Content-Range"]=f"bytes {fb}-{ub}/{fsize}"
-        return StreamingResponse(body,status_code=sc,headers=hdrs)
-    except FileNotFoundError:raise HTTPException(404)
-    except Exception:print(traceback.format_exc());raise HTTPException(500)
+            rps = rh.replace("bytes=", "").split("-")
+            fb = int(rps[0])
+            if len(rps) > 1 and rps[1]:
+                ub = int(rps[1])
+        if ub >= fsize or fb < 0:
+            raise HTTPException(416)
+        rl = ub - fb + 1
+        cs = 1024 * 1024
+        off = (fb // cs) * cs
+        fc = fb - off
+        lc = (ub % cs) + 1
+        pc = math.ceil(rl / cs)
+        body = tc.yield_file(fid, client_id, off, fc, lc, pc, cs)
+        sc = 206 if rh else 200
+        hdrs = {
+            "Content-Type": m.mime_type or "application/octet-stream",
+            "Accept-Ranges": "bytes",
+            "Content-Disposition": f'inline; filename="{m.file_name}"',
+            "Content-Length": str(rl)
+        }
+        if rh:
+            hdrs["Content-Range"] = f"bytes {fb}-{ub}/{fsize}"
+        return StreamingResponse(body, status_code=sc, headers=hdrs)
+    except FileNotFoundError:
+        raise HTTPException(404)
+    except Exception:
+        print(traceback.format_exc())
+        raise HTTPException(500)
 
 # =====================================================================================
 # --- MAIN EXECUTION BLOCK ---
@@ -370,5 +424,4 @@ async def stream_media(r:Request,mid:int,fname:str):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    # Log level ko "info" rakho taaki hamara filter kaam kar sake
     uvicorn.run("app:app", host="0.0.0.0", port=port, log_level="info")
