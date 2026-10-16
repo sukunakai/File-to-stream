@@ -27,11 +27,20 @@ from config import Config
 from database import db
 
 # =====================================================================================
-# --- BOT CLIENT AUR CACHE SETUP ---
+# --- BOT CLIENT INITIALIZATION ---
 # =====================================================================================
 
-bot = Client("SimpleStreamBot", api_id=Config.API_ID, api_hash=Config.API_HASH, bot_token=Config.BOT_TOKEN, in_memory=True)
-multi_clients = {}; work_loads = {}; class_cache = {}
+bot = Client(
+    "SimpleStreamBot",
+    api_id=Config.API_ID,
+    api_hash=Config.API_HASH,
+    bot_token=Config.BOT_TOKEN,
+    in_memory=True
+)
+
+multi_clients = {}
+work_loads = {}
+class_cache = {}
 
 # =====================================================================================
 # --- PYROGRAM BOT HANDLERS ---
@@ -39,6 +48,7 @@ multi_clients = {}; work_loads = {}; class_cache = {}
 
 @bot.on_message(filters.command("start") & filters.private)
 async def start_command(client: Client, message: Message):
+    print(f"--> [DEBUG] /start received from {message.from_user.id}")
     user_id = message.from_user.id
     user_name = message.from_user.first_name
     
@@ -80,6 +90,7 @@ __Just Send Or Forward Any File To Me And I will instantly give you a special li
 
 async def handle_file_upload(message: Message, user_id: int):
     try:
+        print(f"--> [DEBUG] File upload received from {user_id}")
         sent_message = await message.copy(chat_id=Config.STORAGE_CHANNEL)
         unique_id = secrets.token_urlsafe(8)
         await db.save_link(unique_id, sent_message.id)
@@ -128,74 +139,6 @@ async def cleanup_channel(c: Client):
                 print(f"Cleanup Error: {e}")
     except Exception as e:
         print(f"Cleanup Error: {e}")
-
-# =====================================================================================
-# --- SETUP: BOT, WEB SERVER, AUR LOGGING ---
-# =====================================================================================
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    print("--- Lifespan: Server chalu ho raha hai... ---")
-    
-    await db.connect()
-    
-    try:
-        print("Starting main Pyrogram bot...")
-        await bot.start()
-        
-        me = await bot.get_me()
-        Config.BOT_USERNAME = me.username
-        print(f"✅ Main Bot [@{Config.BOT_USERNAME}] safaltapoorvak start ho gaya.")
-
-        # --- MULTI-CLIENT STARTUP ---
-        multi_clients[0] = bot
-        work_loads[0] = 0
-        await initialize_clients()
-        
-        print(f"Verifying storage channel ({Config.STORAGE_CHANNEL})...")
-        await bot.get_chat(Config.STORAGE_CHANNEL)
-        print("✅ Storage channel accessible hai.")
-
-        if Config.FORCE_SUB_CHANNEL:
-            try:
-                print(f"Verifying force sub channel ({Config.FORCE_SUB_CHANNEL})...")
-                await bot.get_chat(Config.FORCE_SUB_CHANNEL)
-                print("✅ Force Sub channel accessible hai.")
-            except Exception as e:
-                print(f"!!! WARNING: Bot, Force Sub channel mein admin nahi hai. Error: {e}")
-        
-        try:
-            await cleanup_channel(bot)
-        except Exception as e:
-            print(f"Warning: Channel cleanup fail ho gaya. Error: {e}")
-
-        print("--- Lifespan: Startup safaltapoorvak poora hua. ---")
-    
-    except Exception as e:
-        print(f"!!! FATAL ERROR: Bot startup ke dauraan error aa gaya: {traceback.format_exc()}")
-    
-    yield
-    
-    print("--- Lifespan: Server band ho raha hai... ---")
-    if bot.is_initialized:
-        await bot.stop()
-    print("--- Lifespan: Shutdown poora hua. ---")
-
-app = FastAPI(lifespan=lifespan)
-templates = Jinja2Templates(directory="templates")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-class HideDLFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        return "GET /dl/" not in record.getMessage()
-
-logging.getLogger("uvicorn.access").addFilter(HideDLFilter())
 
 # =====================================================================================
 # --- MULTI-CLIENT LOGIC ---
@@ -273,6 +216,74 @@ def mask_filename(name: str):
         metadata_part = ""
     masked_title = ''.join(c if (i % 3 == 0 and c.isalnum()) else ('*' if c.isalnum() else c) for i, c in enumerate(title_part))
     return f"{masked_title} {metadata_part}{ext}".strip()
+
+# =====================================================================================
+# --- FASTAPI LIFESPAN & APP ---
+# =====================================================================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("--- Lifespan: Server chalu ho raha hai... ---")
+    
+    await db.connect()
+    
+    try:
+        print("Starting main Pyrogram bot...")
+        await bot.start()
+        
+        me = await bot.get_me()
+        Config.BOT_USERNAME = me.username
+        print(f"✅ Main Bot [@{Config.BOT_USERNAME}] safaltapoorvak start ho gaya.")
+
+        # Multi-client startup
+        multi_clients[0] = bot
+        work_loads[0] = 0
+        await initialize_clients()
+        
+        print(f"Verifying storage channel ({Config.STORAGE_CHANNEL})...")
+        await bot.get_chat(Config.STORAGE_CHANNEL)
+        print("✅ Storage channel accessible hai.")
+
+        if Config.FORCE_SUB_CHANNEL:
+            try:
+                print(f"Verifying force sub channel ({Config.FORCE_SUB_CHANNEL})...")
+                await bot.get_chat(Config.FORCE_SUB_CHANNEL)
+                print("✅ Force Sub channel accessible hai.")
+            except Exception as e:
+                print(f"!!! WARNING: Bot, Force Sub channel mein admin nahi hai. Error: {e}")
+        
+        try:
+            await cleanup_channel(bot)
+        except Exception as e:
+            print(f"Warning: Channel cleanup fail ho gaya. Error: {e}")
+
+        print("--- Lifespan: Startup safaltapoorvak poora hua. ---")
+    
+    except Exception as e:
+        print(f"!!! FATAL ERROR: Bot startup ke dauraan error aa gaya: {traceback.format_exc()}")
+    
+    yield
+    
+    print("--- Lifespan: Server band ho raha hai... ---")
+    if bot.is_initialized:
+        await bot.stop()
+    print("--- Lifespan: Shutdown poora hua. ---")
+
+app = FastAPI(lifespan=lifespan)
+templates = Jinja2Templates(directory="templates")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class HideDLFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "GET /dl/" not in record.getMessage()
+
+logging.getLogger("uvicorn.access").addFilter(HideDLFilter())
 
 # =====================================================================================
 # --- FASTAPI WEB SERVER ROUTES ---
