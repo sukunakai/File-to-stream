@@ -22,7 +22,6 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 import math
 
-# Project ki dusri files se important cheezein import karo
 from config import Config
 from database import db
 
@@ -157,6 +156,12 @@ async def lifespan(app: FastAPI):
         me = await bot.get_me()
         Config.BOT_USERNAME = me.username
         print(f"✅ Main Bot [@{Config.BOT_USERNAME}] safaltapoorvak start ho gaya.")
+
+        # Pyrogram ke updater worker ko loop me active rakhne ka fix
+        if hasattr(bot, "dispatcher") and bot.dispatcher:
+            print("Starting Pyrogram dispatcher worker loop...")
+            for _ in range(bot.workers):
+                asyncio.create_task(bot.dispatcher.worker())
 
         # --- MULTI-CLIENT STARTUP ---
         multi_clients[0] = bot
@@ -428,10 +433,6 @@ async def stream_media(r: Request, mid: int, fname: str):
     except Exception:
         print(traceback.format_exc())
         raise HTTPException(500)
-
-# =====================================================================================
-# --- MAIN EXECUTION BLOCK ---
-# =====================================================================================
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
