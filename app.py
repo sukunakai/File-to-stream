@@ -26,6 +26,67 @@ import math
 from config import Config
 from database import db
 
+bot = Client("SimpleStreamBot", api_id=Config.API_ID, api_hash=Config.API_HASH, bot_token=Config.BOT_TOKEN, in_memory=True)
+multi_clients = {}; work_loads = {}; class_cache = {}
+
+@bot.on_message(filters.command("start") & filters.private)
+async def start_command(client: Client, message: Message):
+    user_id = message.from_user.id
+    user_name = message.from_user.first_name
+    
+    if len(message.command) > 1 and message.command[1].startswith("verify_"):
+        unique_id = message.command[1].split("_", 1)[1]
+        
+        if Config.FORCE_SUB_CHANNEL:
+            try:
+                await client.get_chat_member(Config.FORCE_SUB_CHANNEL, user_id)
+            except UserNotParticipant:
+                channel_username = str(Config.FORCE_SUB_CHANNEL).replace('@', '')
+                channel_link = f"https://t.me/{channel_username}"
+                join_button = InlineKeyboardButton("📢 Join Channel", url=channel_link)
+                retry_button = InlineKeyboardButton("✅ Joined", url=f"https://t.me/{Config.BOT_USERNAME}?start={message.command[1]}")
+                keyboard = InlineKeyboardMarkup([[join_button], [retry_button]])
+                await message.reply_text(
+                    "**You Must Join Our Channel To Get The Link!**\n\n"
+                    "__Join Channel & Click '✅ Joined'.__",
+                    reply_markup=keyboard, quote=True
+                )
+                return
+
+        final_link = f"{Config.BASE_URL}/show/{unique_id}"
+        reply_text = f"__✅ Verification Successful!\n\nCopy Link:__ `{final_link}`"
+        button = InlineKeyboardMarkup([[InlineKeyboardButton("Open Link", url=final_link)]])
+        await message.reply_text(reply_text, reply_markup=button, quote=True, disable_web_page_preview=True)
+
+    else:
+        reply_text = f"""
+👋 **Hello, {user_name}!**
+
+__Welcome To Sharing Box Bot. I Can Help You Create Permanent, Shareable Links For Your Files.__
+
+**How To Use Me:**
+
+__Just Send Or Forward Any File To Me And I will instantly give you a special link that you can share with anyone!__
+"""
+        await message.reply_text(reply_text)
+
+async def handle_file_upload(message: Message, user_id: int):
+    try:
+        sent_message = await message.copy(chat_id=Config.STORAGE_CHANNEL)
+        unique_id = secrets.token_urlsafe(8)
+        await db.save_link(unique_id, sent_message.id)
+        
+        verify_link = f"https://t.me/{Config.BOT_USERNAME}?start=verify_{unique_id}"
+        button = InlineKeyboardMarkup([[InlineKeyboardButton("Get Link Now", url=verify_link)]])
+        
+        await message.reply_text("__✅ File Uploaded!__", reply_markup=button, quote=True)
+    except Exception as e:
+        print(f"!!! ERROR: {traceback.format_exc()}"); await message.reply_text("Sorry, something went wrong.")
+
+@bot.on_message(filters.private & (filters.document | filters.video | filters.audio))
+async def file_handler(_, message: Message):
+    await handle_file_upload(message, message.from_user.id)
+
 # =====================================================================================
 # --- SETUP: BOT, WEB SERVER, AUR LOGGING ---
 # =====================================================================================
@@ -101,8 +162,6 @@ class HideDLFilter(logging.Filter):
 logging.getLogger("uvicorn.access").addFilter(HideDLFilter())
 # --- FIX KHATAM ---
 
-bot = Client("SimpleStreamBot", api_id=Config.API_ID, api_hash=Config.API_HASH, bot_token=Config.BOT_TOKEN, in_memory=True)
-multi_clients = {}; work_loads = {}; class_cache = {}
 
 # =====================================================================================
 # --- MULTI-CLIENT LOGIC ---
@@ -188,63 +247,6 @@ def mask_filename(name: str):
 # --- PYROGRAM BOT HANDLERS ---
 # =====================================================================================
 
-@bot.on_message(filters.command("start") & filters.private)
-async def start_command(client: Client, message: Message):
-    user_id = message.from_user.id
-    user_name = message.from_user.first_name
-    
-    if len(message.command) > 1 and message.command[1].startswith("verify_"):
-        unique_id = message.command[1].split("_", 1)[1]
-        
-        if Config.FORCE_SUB_CHANNEL:
-            try:
-                await client.get_chat_member(Config.FORCE_SUB_CHANNEL, user_id)
-            except UserNotParticipant:
-                channel_username = str(Config.FORCE_SUB_CHANNEL).replace('@', '')
-                channel_link = f"https://t.me/{channel_username}"
-                join_button = InlineKeyboardButton("📢 Join Channel", url=channel_link)
-                retry_button = InlineKeyboardButton("✅ Joined", url=f"https://t.me/{Config.BOT_USERNAME}?start={message.command[1]}")
-                keyboard = InlineKeyboardMarkup([[join_button], [retry_button]])
-                await message.reply_text(
-                    "**You Must Join Our Channel To Get The Link!**\n\n"
-                    "__Join Channel & Click '✅ Joined'.__",
-                    reply_markup=keyboard, quote=True
-                )
-                return
-
-        final_link = f"{Config.BASE_URL}/show/{unique_id}"
-        reply_text = f"__✅ Verification Successful!\n\nCopy Link:__ `{final_link}`"
-        button = InlineKeyboardMarkup([[InlineKeyboardButton("Open Link", url=final_link)]])
-        await message.reply_text(reply_text, reply_markup=button, quote=True, disable_web_page_preview=True)
-
-    else:
-        reply_text = f"""
-👋 **Hello, {user_name}!**
-
-__Welcome To Sharing Box Bot. I Can Help You Create Permanent, Shareable Links For Your Files.__
-
-**How To Use Me:**
-
-__Just Send Or Forward Any File To Me And I will instantly give you a special link that you can share with anyone!__
-"""
-        await message.reply_text(reply_text)
-
-async def handle_file_upload(message: Message, user_id: int):
-    try:
-        sent_message = await message.copy(chat_id=Config.STORAGE_CHANNEL)
-        unique_id = secrets.token_urlsafe(8)
-        await db.save_link(unique_id, sent_message.id)
-        
-        verify_link = f"https://t.me/{Config.BOT_USERNAME}?start=verify_{unique_id}"
-        button = InlineKeyboardMarkup([[InlineKeyboardButton("Get Link Now", url=verify_link)]])
-        
-        await message.reply_text("__✅ File Uploaded!__", reply_markup=button, quote=True)
-    except Exception as e:
-        print(f"!!! ERROR: {traceback.format_exc()}"); await message.reply_text("Sorry, something went wrong.")
-
-@bot.on_message(filters.private & (filters.document | filters.video | filters.audio))
-async def file_handler(_, message: Message):
-    await handle_file_upload(message, message.from_user.id)
 
 @bot.on_chat_member_updated(filters.chat(Config.STORAGE_CHANNEL))
 async def simple_gatekeeper(c: Client, m_update: ChatMemberUpdated):
