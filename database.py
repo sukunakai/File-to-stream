@@ -1,42 +1,37 @@
-# database.py (UPDATED VERSION)
-
-import motor.motor_asyncio
-from config import Config
+import os
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 class Database:
     def __init__(self):
-        self._client = None
         self.db = None
-        self.collection = None
-        if not Config.DATABASE_URL:
-            print("WARNING: DATABASE_URL not set. Links will not be permanent.")
 
     async def connect(self):
-        """Database se connection banata hai."""
-        if Config.DATABASE_URL:
-            print("Connecting to the database...")
-            self._client = motor.motor_asyncio.AsyncIOMotorClient(Config.DATABASE_URL)
-            self.db = self._client["StreamLinksDB"]
-            self.collection = self.db["links"]
-            print("✅ Database connection established.")
-        else:
-            self.db = None
-            self.collection = None
+        if not firebase_admin._apps:
+            cred_path = "/etc/secrets/serviceAccountKey.json"
+            if not os.path.exists(cred_path):
+                cred_path = "serviceAccountKey.json"
 
-    async def disconnect(self):
-        """Database connection ko band karta hai."""
-        if self._client:
-            self._client.close()
-            print("Database connection closed.")
+            if os.path.exists(cred_path):
+                cred = credentials.Certificate(cred_path)
+                firebase_admin.initialize_app(cred)
+            else:
+                print("Firebase secret file nahi mili, temporary memory chalegi.")
+                return
 
-    async def save_link(self, unique_id, message_id):
-        if self.collection is not None:
-            await self.collection.insert_one({'_id': unique_id, 'message_id': message_id})
+        self.db = firestore.client()
+        print("✅ Firebase Database connected successfully.")
 
-    async def get_link(self, unique_id):
-        if self.collection is not None:
-            doc = await self.collection.find_one({'_id': unique_id})
-            return doc.get('message_id') if doc else None
+    async def save_link(self, unique_id: str, message_id: int):
+        if self.db:
+            doc_ref = self.db.collection("links").document(unique_id)
+            doc_ref.set({"message_id": message_id})
+
+    async def get_link(self, unique_id: str):
+        if self.db:
+            doc = self.db.collection("links").document(unique_id).get()
+            if doc.exists:
+                return doc.to_dict().get("message_id")
         return None
 
 db = Database()
